@@ -1568,7 +1568,24 @@ notification_agent = build_notification_agent()
 #################################################################################
 # ORCHESTRATOR ROUTING FUNCTION
 #################################################################################
-def call_multi_agent_system(user_request: str) -> str:
+
+def customer_message(item_name, quantity, fulfilled, total_price=None, reason=None, delivery_date=None):
+    """Formats a consistent, customer-facing response for an order or quote request."""
+    if fulfilled:
+        return (
+            f"Your order for {quantity} units of {item_name} is confirmed. "
+            f"Total price: ${total_price:.2f}. "
+            f"Bulk discounts were applied where eligible. "
+            f"Expected delivery date: {delivery_date}."
+        )
+    return (
+        f"We cannot fulfill your request for {quantity} units of {item_name} right now. "
+        f"Reason: {reason}. Please contact sales for alternatives or a revised delivery date."
+    )
+
+
+
+def call_multi_agent_system(user_request: str) -> Dict:
     """
     Route incoming customer request to the appropriate specialist agent.
     
@@ -1677,10 +1694,57 @@ def call_multi_agent_system(user_request: str) -> str:
     try:
         # Execute selected agent with capped reasoning steps
         # max_steps=50 prevents agents from running indefinitely
-        response = agent.run(prompt, max_steps=50)
-        return str(response)
+        raw_response = str(agent.run(prompt, max_steps=50))
+
+        # Default response structure
+        structured_response = {
+            "agent_used": agent.name,
+            "fulfilled": False,
+            "reason": "Could not determine a specific outcome from the agent's response.",
+            "response": raw_response,
+            "order_details": {}
+        }
+
+        try:
+            # Find the last dictionary in the agent's output string
+            last_dict_str = "{" + raw_response.rsplit("{", 1)[-1]
+            result_dict = ast.literal_eval(last_dict_str)
+
+            if isinstance(result_dict, dict):
+                structured_response["order_details"] = result_dict
+                is_fulfilled = result_dict.get("success", False)
+                structured_response["fulfilled"] = is_fulfilled
+                structured_response["reason"] = result_dict.get("reason", "No specific reason provided.")
+
+                # Generate a customer-facing response string
+                if "item_name" in result_dict and "quantity" in result_dict:
+                    delivery_date = None
+                    if is_fulfilled:
+                        delivery_date = get_supplier_delivery_date(
+                            result_dict.get("order_date"),
+                            result_dict.get("quantity")
+                        )
+
+                    structured_response["response"] = customer_message(
+                        item_name=result_dict.get("item_name"),
+                        quantity=result_dict.get("quantity"),
+                        fulfilled=is_fulfilled,
+                        total_price=result_dict.get("total_price") or result_dict.get("quoted_total"),
+                        reason=result_dict.get("reason", "unknown error"),
+                        delivery_date=delivery_date
+                    )
+        except (ValueError, SyntaxError, IndexError):
+            pass # Fallback to default structured_response
+        return structured_response
     except Exception as e:
-        return f"Error processing request: {str(e)}"
+        print(f"ERROR: An unexpected error occurred in call_multi_agent_system: {e}")
+        return {
+            "agent_used": "system",
+            "fulfilled": False,
+            "reason": "A system error occurred.",
+            "response": "We're sorry, but we encountered an unexpected error while processing your request. Please try again later or contact support.",
+            "order_details": {}
+        }
 
 
 
@@ -1705,17 +1769,6 @@ def run_test_scenarios():
     # Get initial state
     initial_date = quote_requests_sample["request_date"].min().strftime("%Y-%m-%d")
     report = generate_financial_report(initial_date)
-    current_cash = report["cash_balance"]
-    current_inventory = report["inventory_value"]
-
-    ############
-    ############
-    ############
-    # INITIALIZE YOUR MULTI AGENT SYSTEM HERE
-    ############
-    ############
-    ############
-
     results = []
     for idx, row in quote_requests_sample.iterrows():
         request_date = row["request_date"].strftime("%Y-%m-%d")
@@ -1723,8 +1776,6 @@ def run_test_scenarios():
         print(f"\n=== Request {idx+1} ===")
         print(f"Context: {row['job']} organizing {row['event']}")
         print(f"Request Date: {request_date}")
-        print(f"Cash Balance: ${current_cash:.2f}")
-        print(f"Inventory Value: ${current_inventory:.2f}")
 
         # Process request
         request_with_date = f"""
@@ -1734,27 +1785,20 @@ def run_test_scenarios():
                 Customer request: {row['request']}
                 """
 
-        ############
-        ############
-        ############
-        # USE YOUR MULTI AGENT SYSTEM TO HANDLE THE REQUEST
-        ############
-        ############
-        ############
-
+        print(f"Cash Balance before request: ${get_cash_balance(request_date):.2f}")
+        before_cash = get_cash_balance(request_date)
         try:
-            response = call_multi_agent_system(request_with_date)
+            agent_result = call_multi_agent_system(request_with_date)
+            response = agent_result.get("response", "No response generated.")
         except Exception as e:
             response = f"System error while processing request: {e}"
-
-        # Update state
-        report = generate_financial_report(request_date)
-        current_cash = report["cash_balance"]
-        current_inventory = report["inventory_value"]
+            agent_result = {"fulfilled": False, "reason": str(e)}
+        after_cash = get_cash_balance(request_date)
+        report = generate_financial_report(request_date) # For inventory value
 
         print(f"Response: {response}")
-        print(f"Updated Cash: ${current_cash:.2f}")
-        print(f"Updated Inventory: ${current_inventory:.2f}")
+        print(f"Updated Cash: ${after_cash:.2f}")
+        print(f"Updated Inventory: ${report['inventory_value']:.2f}")
 
         results.append(
             {
@@ -1763,8 +1807,10 @@ def run_test_scenarios():
                 "job": row["job"],
                 "event": row["event"],
                 "request": row["request"],
-                "cash_balance": current_cash,
-                "inventory_value": current_inventory,
+                "cash_before": before_cash,
+                "cash_after": after_cash,
+                "cash_changed": after_cash != before_cash,
+                "fulfilled": agent_result.get("fulfilled", False),
                 "response": response,
             }
         )
@@ -1780,6 +1826,13 @@ def run_test_scenarios():
 
     # Save results
     pd.DataFrame(results).to_csv("test_results.csv", index=False)
+    
+    # Add assertions for rigor
+    results_df = pd.DataFrame(results)
+    assert results_df["cash_changed"].sum() >= 3, "Assertion failed: Cash balance did not change for at least three requests."
+    assert not results_df["fulfilled"].all(), "Assertion failed: At least one request should have been unfulfilled."
+    print("\nAssertions passed: System fulfilled at least three requests and correctly rejected at least one.")
+    
     return results
 
 
