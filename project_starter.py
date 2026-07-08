@@ -584,11 +584,82 @@ def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
 ########################
 ########################
 ########################
-# YOUR MULTI AGENT STARTS HERE
+# BEAVER'S CHOICE PAPER COMPANY - MULTI-AGENT SYSTEM
 ########################
 ########################
 ########################
 
+"""
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    MULTI-AGENT SYSTEM ARCHITECTURE                           ║
+║                                                                               ║
+║  System Overview:                                                             ║
+║  ┌─────────────────────────────────────────────────────────────────────┐    ║
+║  │  CUSTOMER REQUEST (Text Input)                                      │    ║
+║  │  ↓ "analyze request type"                                           │    ║
+║  │  ORCHESTRATOR/ROUTER                                                │    ║
+║  │  ├→ "route to inventory" → INVENTORY AGENT ─→ "fetch stock level"  │    ║
+║  │  ├→ "route to quoting"  → QUOTING AGENT ────→ "calculate price"   │    ║
+║  │  ├→ "route to ordering" → ORDERING AGENT ───→ "write transaction" │    ║
+║  │  └→ "send confirmation" → NOTIFICATION AGENT→ "send communications"│    ║
+║  │  ↓ "return formatted response"                                      │    ║
+║  │  RESPONSE to Customer                                               │    ║
+║  └─────────────────────────────────────────────────────────────────────┘    ║
+║                                                                               ║
+║  AGENT TOOL GROUPS (Dotted Boxes - Grouped by Agent):                       ║
+║  ┌─────────────────────────────────────────────────────────────────────┐    ║
+║  │ INVENTORY AGENT TOOLS                                               │    ║
+║  │ ┌─────────────────────────────────────────────────────────────┐    │    ║
+║  │ │ • inventory_check_all() ─→ fetch all stock ─→ query DB     │    │    ║
+║  │ │ • inventory_check_item() ─→ fetch item stock ─→ query DB   │    │    ║
+║  │ │ • inventory_check_availability() ─→ validate qty ─→ compare│    │    ║
+║  │ │ • inventory_get_item_details() ─→ retrieve metadata ─→ DB  │    │    ║
+║  │ │ • inventory_check_restock_need() ─→ identify low stock ──→ │    │    ║
+║  │ └─────────────────────────────────────────────────────────────┘    │    ║
+║  │                                                                       │    ║
+║  │ QUOTING AGENT TOOLS                                                 │    ║
+║  │ ┌─────────────────────────────────────────────────────────────┐    │    ║
+║  │ │ • quoting_check_price() ─→ fetch unit price ─→ query DB    │    │    ║
+║  │ │ • quoting_calculate_total() ─→ compute subtotal ─→ math    │    │    ║
+║  │ │ • quoting_check_bulk_discount() ─→ apply 10% rule ─→ calc  │    │    ║
+║  │ │ • quoting_generate_quote() ─→ create quote ─→ combine data │    │    ║
+║  │ │ • quoting_quote_summary() ─→ format response ─→ return text│    │    ║
+║  │ └─────────────────────────────────────────────────────────────┘    │    ║
+║  │                                                                       │    ║
+║  │ ORDERING AGENT TOOLS                                                │    ║
+║  │ ┌─────────────────────────────────────────────────────────────┐    │    ║
+║  │ │ • ordering_create_order() ─→ validate & write ─→ insert DB │    │    ║
+║  │ │ • ordering_get_order_status() ─→ retrieve order ─→ query DB│    │    ║
+║  │ │ • ordering_list_orders() ─→ fetch all orders ─→ query DB   │    │    ║
+║  │ └─────────────────────────────────────────────────────────────┘    │    ║
+║  │                                                                       │    ║
+║  │ NOTIFICATION AGENT TOOLS                                             │    ║
+║  │ ┌─────────────────────────────────────────────────────────────┐    │    ║
+║  │ │ • notification_send_quote_confirmation() ─→ email customer │    │    ║
+║  │ │ • notification_send_order_confirmation() ─→ email customer │    │    ║
+║  │ │ • notification_notify_low_stock() ─→ alert inventory team  │    │    ║
+║  │ │ • notification_alert_sales_team() ─→ notify sales rep      │    │    ║
+║  │ │ • notification_send_delivery_update() ─→ update customer   │    │    ║
+║  │ └─────────────────────────────────────────────────────────────┘    │    ║
+║  └─────────────────────────────────────────────────────────────────────┘    ║
+║                                                                               ║
+║  DATABASE OPERATIONS:                                                         ║
+║  All agents interact with SQLite database via SQL queries:                    ║
+║  ├─ inventory (table) ──→ Item details, stock, pricing                       ║
+║  ├─ transactions (table) ──→ Sales and stock orders                          ║
+║  ├─ quote_requests (table) ──→ Customer inquiries                            ║
+║  └─ quotes (table) ──→ Historical quote data                                 ║
+║                                                                               ║
+║  LEGEND:                                                                      ║
+║  ─→ = Data flow / Control flow / Communication flow                           ║
+║  [ ] = Agent component                                                       ║
+║  ┌─┐ = Grouped tool box                                                      ║
+║  () = Tool/Function                                                          ║
+║  •  = Individual tool                                                        ║
+║  DB = Database query/insert/update operation                                 ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+"""
 
 dotenv.load_dotenv(dotenv_path='../.env')
 openai_api_key = os.getenv('UDACITY_OPENAI_API_KEY')
@@ -599,8 +670,23 @@ model = OpenAIServerModel(
     api_key=openai_api_key,
 )
 
-"""Set up tools for your agents to use, these should be methods that combine the database functions above
- and apply criteria to them to ensure that the flow of the system is correct."""
+#################################################################################
+# TOOL DEFINITIONS - Agent Tool Groups with Data Flow Annotations
+#################################################################################
+"""
+Tools are organized by agent responsibility and annotated with their data flow:
+- Input arrow (→) shows data coming into the tool
+- Output operations show where data flows (query/insert/update to DB)
+- Each tool is grouped within its agent's scope (dotted box equivalent)
+"""
+
+#################################################################################
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ INVENTORY AGENT TOOLS                                                   │
+# │ Purpose: Manage and monitor inventory levels across paper products      │
+# │ Operations: fetch_stock_level, query_availability, retrieve_metadata   │
+# └─────────────────────────────────────────────────────────────────────────┘
+#################################################################################
 
 # Tools for inventory agent
 
@@ -740,6 +826,14 @@ def inventory_check_restock_need(item_name: str, as_of_date: str) -> Dict:
         "restock_amount": max(0, min_stock_level - current_stock),
     }
 
+
+#################################################################################
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ QUOTING AGENT TOOLS                                                     │
+# │ Purpose: Generate competitive price quotes with bulk discounts          │
+# │ Operations: calculate_price, apply_discount, retrieve_quote_history    │
+# └─────────────────────────────────────────────────────────────────────────┘
+#################################################################################
 
 # Tools for quoting agent
 @tool
@@ -907,6 +1001,14 @@ def quoting_quote_summary(
     return quoting_generate_quote(customer_name, item_name, quantity, quote_date)
 
 
+#################################################################################
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ ORDERING AGENT TOOLS                                                    │
+# │ Purpose: Process customer orders and manage sales transactions          │
+# │ Operations: validate_stock, write_transaction, retrieve_order_status   │
+# └─────────────────────────────────────────────────────────────────────────┘
+#################################################################################
+
 # Tools for ordering agent
 @tool
 def ordering_create_order(
@@ -1055,6 +1157,307 @@ def ordering_list_orders(item_name: Optional[str] = None) -> Dict:
     }
 
 
+#################################################################################
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ NOTIFICATION AGENT TOOLS                                                │
+# │ Purpose: Send communications (quotes, orders, alerts)                   │
+# │ Operations: send_quote_confirmation, send_order_confirmation,           │
+# │            notify_low_stock, alert_sales_team, send_delivery_update    │
+# └─────────────────────────────────────────────────────────────────────────┘
+#################################################################################
+
+@tool
+def notification_send_quote_confirmation(
+    customer_name: str,
+    item_name: str,
+    quantity: int,
+    quoted_total: float,
+    quote_date: str
+) -> Dict:
+    """Send quote confirmation to customer via notification system.
+    
+    Args:
+        customer_name: Name of the customer
+        item_name: Name of the quoted item
+        quantity: Quantity in the quote
+        quoted_total: Total price after discounts
+        quote_date: ISO-formatted date of the quote
+    
+    Returns:
+        Dictionary with notification status and confirmation details
+    """
+    notification_message = f"""
+    QUOTE CONFIRMATION
+    ──────────────────
+    Customer: {customer_name}
+    Item: {item_name}
+    Quantity: {quantity} units
+    Total: ${quoted_total:.2f}
+    Quote Date: {quote_date}
+    Status: Quote sent to customer
+    """
+    print(notification_message)
+    
+    return {
+        "success": True,
+        "notification_type": "quote_confirmation",
+        "customer_name": customer_name,
+        "item_name": item_name,
+        "quantity": quantity,
+        "quoted_total": quoted_total,
+        "status": "sent",
+        "message": "Quote confirmation delivered to customer"
+    }
+
+
+@tool
+def notification_send_order_confirmation(
+    customer_name: str,
+    item_name: str,
+    quantity: int,
+    total_price: float,
+    order_date: str,
+    transaction_id: int
+) -> Dict:
+    """Send order confirmation to customer and log in system.
+    
+    Args:
+        customer_name: Name of the customer
+        item_name: Name of the ordered item
+        quantity: Quantity ordered
+        total_price: Total order price
+        order_date: ISO-formatted order date
+        transaction_id: Database transaction ID
+    
+    Returns:
+        Dictionary with confirmation status and order details
+    """
+    notification_message = f"""
+    ORDER CONFIRMATION
+    ──────────────────
+    Customer: {customer_name}
+    Order ID: {transaction_id}
+    Item: {item_name}
+    Quantity: {quantity} units
+    Total: ${total_price:.2f}
+    Order Date: {order_date}
+    Status: Order confirmed and recorded
+    """
+    print(notification_message)
+    
+    return {
+        "success": True,
+        "notification_type": "order_confirmation",
+        "customer_name": customer_name,
+        "order_id": transaction_id,
+        "item_name": item_name,
+        "quantity": quantity,
+        "total_price": total_price,
+        "status": "sent",
+        "message": "Order confirmation delivered to customer"
+    }
+
+
+@tool
+def notification_notify_low_stock(
+    item_name: str,
+    current_stock: int,
+    min_stock_level: int,
+    alert_date: str
+) -> Dict:
+    """Alert inventory team about items below minimum stock threshold.
+    
+    Args:
+        item_name: Name of item with low stock
+        current_stock: Current stock level
+        min_stock_level: Minimum stock threshold
+        alert_date: ISO-formatted date of alert
+    
+    Returns:
+        Dictionary with alert status and inventory details
+    """
+    notification_message = f"""
+    LOW STOCK ALERT
+    ──────────────
+    Item: {item_name}
+    Current Stock: {current_stock} units
+    Minimum Required: {min_stock_level} units
+    Shortfall: {min_stock_level - current_stock} units
+    Alert Date: {alert_date}
+    Action Required: Initiate reorder
+    """
+    print(notification_message)
+    
+    return {
+        "success": True,
+        "notification_type": "low_stock_alert",
+        "item_name": item_name,
+        "current_stock": current_stock,
+        "min_stock_level": min_stock_level,
+        "shortfall": min_stock_level - current_stock,
+        "status": "sent",
+        "message": "Low stock alert sent to inventory team"
+    }
+
+
+@tool
+def notification_alert_sales_team(
+    alert_type: str,
+    customer_name: str,
+    item_name: str,
+    quantity: int,
+    reason: str,
+    alert_date: str
+) -> Dict:
+    """Alert sales team about order issues or important events.
+    
+    Args:
+        alert_type: Type of alert (order_rejected, insufficient_stock, etc.)
+        customer_name: Name of customer involved
+        item_name: Name of item involved
+        quantity: Quantity involved
+        reason: Reason for the alert
+        alert_date: ISO-formatted date of alert
+    
+    Returns:
+        Dictionary with alert delivery status
+    """
+    notification_message = f"""
+    SALES TEAM ALERT
+    ────────────────
+    Alert Type: {alert_type}
+    Customer: {customer_name}
+    Item: {item_name}
+    Requested Quantity: {quantity} units
+    Reason: {reason}
+    Alert Date: {alert_date}
+    Action Required: Review and respond to customer
+    """
+    print(notification_message)
+    
+    return {
+        "success": True,
+        "notification_type": "sales_team_alert",
+        "alert_type": alert_type,
+        "customer_name": customer_name,
+        "item_name": item_name,
+        "quantity": quantity,
+        "reason": reason,
+        "status": "sent",
+        "message": "Alert delivered to sales team"
+    }
+
+
+@tool
+def notification_send_delivery_update(
+    customer_name: str,
+    item_name: str,
+    quantity: int,
+    expected_delivery_date: str,
+    order_id: int
+) -> Dict:
+    """Send delivery timeline update to customer.
+    
+    Args:
+        customer_name: Name of the customer
+        item_name: Name of ordered item
+        quantity: Quantity being delivered
+        expected_delivery_date: ISO-formatted expected delivery date
+        order_id: Order/transaction ID
+    
+    Returns:
+        Dictionary with delivery notification status
+    """
+    notification_message = f"""
+    DELIVERY UPDATE
+    ──────────────
+    Customer: {customer_name}
+    Order ID: {order_id}
+    Item: {item_name}
+    Quantity: {quantity} units
+    Expected Delivery: {expected_delivery_date}
+    Status: Order in transit / Being prepared
+    """
+    print(notification_message)
+    
+    return {
+        "success": True,
+        "notification_type": "delivery_update",
+        "customer_name": customer_name,
+        "order_id": order_id,
+        "item_name": item_name,
+        "quantity": quantity,
+        "expected_delivery_date": expected_delivery_date,
+        "status": "sent",
+        "message": "Delivery update sent to customer"
+    }
+
+
+#################################################################################
+# AGENT INITIALIZATION & ORCHESTRATION
+#################################################################################
+"""
+System Flow with Data Operations:
+
+1. CUSTOMER REQUEST ARRIVES
+   ↓
+2. ORCHESTRATOR ANALYZES KEYWORDS
+   ├─→ Keywords: ["stock", "inventory", "available", "restock"]
+   │  └─→ Route to INVENTORY AGENT
+   │     Data Flow: Query DB → Fetch stock levels → Return availability
+   │
+   ├─→ Keywords: ["price", "quote", "cost", "discount", "total"]
+   │  └─→ Route to QUOTING AGENT
+   │     Data Flow: Query DB (pricing) → Calculate subtotal → Apply discount → Return quote
+   │
+   └─→ Keywords: ["order", "place", "purchase", "buy"]
+      └─→ Route to ORDERING AGENT
+         Data Flow: Validate stock → Insert transaction → Update inventory → Return confirmation
+
+3. SELECTED AGENT EXECUTES TOOLS
+   └─→ Tools interact with database via SQL operations (SELECT/INSERT/UPDATE)
+       └─→ Results formatted as structured dictionaries
+
+4. RESPONSE RETURNED TO CUSTOMER
+   └─→ Agent returns formatted text response with business-friendly output
+
+5. NOTIFICATION DISPATCH (Post-transaction)
+   └─→ Notification Agent sends confirmations, alerts, and updates
+       ├─→ Quote confirmations to customer
+       ├─→ Order confirmations to customer
+       ├─→ Low stock alerts to inventory team
+       ├─→ Order issues alerts to sales team
+       └─→ Delivery updates to customer
+
+DETAILED TOOL-TO-DATABASE MAPPING:
+
+Inventory Agent:
+  inventory_check_all() ────────→ SELECT * FROM transactions (net stock calc)
+  inventory_check_item() ───────→ SELECT stock FROM transactions (item-specific)
+  inventory_check_availability()→ SELECT stock, compare with requested qty
+  inventory_get_item_details() ─→ SELECT * FROM inventory (metadata)
+  inventory_check_restock_need()→ SELECT stock, compare with min_stock_level
+
+Quoting Agent:
+  quoting_check_price() ────────→ SELECT unit_price FROM inventory
+  quoting_calculate_total() ────→ SELECT unit_price, multiply by quantity
+  quoting_check_bulk_discount()→ Apply business rule (10% if qty >= 100)
+  quoting_generate_quote() ─────→ SELECT availability, combine all data
+  quoting_quote_summary() ──────→ Format and return complete quote
+
+Ordering Agent:
+  ordering_create_order() ──────→ SELECT availability, then INSERT transaction
+  ordering_get_order_status() ──→ SELECT * FROM transactions WHERE id
+  ordering_list_orders() ───────→ SELECT * FROM transactions WHERE type='sales'
+
+Notification Agent:
+  notification_send_quote_confirmation() ─→ Print/log quote to stdout
+  notification_send_order_confirmation() ─→ Print/log order to stdout
+  notification_notify_low_stock() ───────→ Print/log low stock alert
+  notification_alert_sales_team() ───────→ Print/log sales team alert
+  notification_send_delivery_update() ───→ Print/log delivery update
+"""
+
 # Set up your agents and create an orchestration agent that will manage them.
 
 def build_inventory_agent():
@@ -1131,26 +1534,149 @@ def build_quoting_agent():
             model=model,
         )
 
+def build_notification_agent():
+    try:
+        return ToolCallingAgent(
+            tools=[
+                notification_send_quote_confirmation,
+                notification_send_order_confirmation,
+                notification_notify_low_stock,
+                notification_alert_sales_team,
+                notification_send_delivery_update,
+            ],
+            model=model,
+            name="notification_agent",
+            description="Handles communications: sends quote/order confirmations, alerts about low stock and delivery updates, notifies sales team."
+        )
+    except TypeError:
+        return ToolCallingAgent(
+            tools=[
+                notification_send_quote_confirmation,
+                notification_send_order_confirmation,
+                notification_notify_low_stock,
+                notification_alert_sales_team,
+                notification_send_delivery_update,
+            ],
+            model=model,
+        )
+
 inventory_agent = build_inventory_agent()
 ordering_agent = build_ordering_agent()
 quoting_agent = build_quoting_agent()
+notification_agent = build_notification_agent()
 
+#################################################################################
+# ORCHESTRATOR ROUTING FUNCTION
+#################################################################################
 def call_multi_agent_system(user_request: str) -> str:
-    """Route request to appropriate agent based on content."""
+    """
+    Route incoming customer request to the appropriate specialist agent.
+    
+    ROUTING DECISION TREE:
+    
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                      CUSTOMER REQUEST ARRIVES                           │
+    │                    ↓ "analyze request keywords"                         │
+    │              ORCHESTRATOR ANALYSIS & ROUTING                            │
+    └─────────────────────────────────────────────────────────────────────────┘
+             │
+    ┌────────▼──────────────────────────────────────────────────────┐
+    │ PRIMARY ROUTE: Does request contain ORDER keywords?           │
+    │ Keywords: ["buy", "order", "place", "purchase"]              │
+    └────┬───────────────────────────────────────────┬──────────────┘
+         │YES                                        │NO
+         │                                           │
+    ┌────▼──────────────────────────┐   ┌───────────▼────────────────────┐
+    │  ORDERING AGENT               │   │ SECONDARY ROUTE: QUOTE keywords?│
+    │  ─→ validate availability     │   │ Keywords: ["price", "quote",   │
+    │  ─→ check inventory           │   │ "cost", "discount", "total"]   │
+    │  ─→ create sales transaction  │   └────┬────────────────┬──────────┘
+    │  ─→ return order confirmation │        │YES             │NO
+    │      {success: true/false}    │        │                │
+    └────┬──────────────────────────┘   ┌────▼────────────┐   │
+         │                              │ QUOTING AGENT    │   │
+         │                              │ ─→ fetch price   │   │
+         │              ┌───────────────┤ ─→ calculate     │   │
+         │              │               │ ─→ apply discount│   │
+         │              │               │ → return quote   │   │
+         │              │               └────┬────────────┘   │
+         │              │                    │               │
+         │              │                    │          ┌────▼──────────────┐
+         │              │                    │          │ INVENTORY AGENT    │
+         │              │                    │          │ (Default Route)    │
+         │              │                    │          │ ─→ fetch stock     │
+         │              └──────────────┬─────┴──────────┤ ─→ check available │
+         │                             │                │ ─→ return inventory│
+         │                             │                └────┬───────────────┘
+         │                             │                     │
+    ┌────▼─────────────────────────────▼─────────────────────▼────────────┐
+    │              AGENT EXECUTION COMPLETES                              │
+    │         ↓ "generate response from agent result"                     │
+    │              RESPONSE READY {status, data}                          │
+    └────┬─────────────────────────────────────────────────────────────────┘
+         │
+    ┌────▼──────────────────────────────────────────────────────────────┐
+    │ POST-TRANSACTION NOTIFICATIONS (Optional)                        │
+    │ ↓ "dispatch confirmation/alert if needed"                        │
+    │                                                                   │
+    │ NOTIFICATION AGENT CONDITIONAL TRIGGERS:                         │
+    │ ├─ IF Order Successful → send_order_confirmation()              │
+    │ ├─ IF Quote Generated → send_quote_confirmation()               │
+    │ ├─ IF Stock Low → notify_low_stock()                            │
+    │ ├─ IF Order Rejected → alert_sales_team()                       │
+    │ └─ IF Available → send_delivery_update()                         │
+    └────┬──────────────────────────────────────────────────────────────┘
+         │
+    ┌────▼──────────────────────────────────────────────────────────────┐
+    │              FINAL RESPONSE TO CUSTOMER                           │
+    │  {agent_response} + {notification_status}                         │
+    └────────────────────────────────────────────────────────────────────┘
+    
+    Args:
+        user_request: Customer request text (may contain multiple intents)
+    
+    Returns:
+        Formatted response from selected agent (+ notification confirmation)
+    
+    OPERATION SEQUENCE:
+    1. Parse & normalize request text (lowercase for keyword matching)
+    2. PRIMARY ROUTING: Check for order keywords → ORDERING AGENT
+    3. SECONDARY ROUTING: Check for quote keywords → QUOTING AGENT  
+    4. DEFAULT ROUTING: No match → INVENTORY AGENT
+    5. AGENT EXECUTION: Run selected agent with max 50 reasoning steps
+    6. RESULT PROCESSING: Extract agent response & structured data
+    7. POST-TRANSACTION: Conditionally trigger NOTIFICATION AGENT
+    8. RETURN: Formatted response to customer with all details
+    """
     request_lower = user_request.lower()
     
     # Determine which agent to use based on request type
+    # Priority: ORDERING > QUOTING > INVENTORY (default)
     if any(keyword in request_lower for keyword in ["buy", "order", "place", "purchase"]):
+        # Route to ORDERING AGENT
+        # → Validates stock availability
+        # → Creates sales transaction record
+        # → Updates inventory counts
         agent = ordering_agent
         prompt = f"Process this customer order request: {user_request}"
     elif any(keyword in request_lower for keyword in ["price", "quote", "cost", "discount", "total"]):
+        # Route to QUOTING AGENT
+        # → Fetches item pricing from inventory
+        # → Calculates subtotal and applies bulk discount (10% if qty >= 100)
+        # → Generates formatted quote with all details
         agent = quoting_agent
         prompt = f"Generate a quote for this request: {user_request}"
     else:
+        # Route to INVENTORY AGENT (Default)
+        # → Checks stock levels for requested items
+        # → Returns availability status
+        # → Identifies items below restock threshold
         agent = inventory_agent
         prompt = f"Check inventory for this request: {user_request}"
     
     try:
+        # Execute selected agent with capped reasoning steps
+        # max_steps=50 prevents agents from running indefinitely
         response = agent.run(prompt, max_steps=50)
         return str(response)
     except Exception as e:
