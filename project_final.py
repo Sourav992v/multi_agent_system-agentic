@@ -127,7 +127,7 @@ def generate_sample_inventory(paper_supplies: list, coverage: float = 0.4, seed:
     # Return inventory as a pandas DataFrame
     return pd.DataFrame(inventory)
 
-def init_database(db_engine: Engine, seed: int = 137) -> Engine:    
+def init_database(db_engine: Engine, seed: int = 137, coverage: float = 0.4) -> Engine:
     """
     Set up the Munder Difflin database with all required tables and initial records.
 
@@ -141,6 +141,7 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
     Args:
         db_engine (Engine): A SQLAlchemy engine connected to the SQLite database.
         seed (int, optional): A random seed used to control reproducibility of inventory stock levels.
+        coverage (float, optional): Fraction of items to include in the inventory.
                               Default is 137.
 
     Returns:
@@ -204,7 +205,7 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
         # ----------------------------
         # 4. Generate inventory and seed stock
         # ----------------------------
-        inventory_df = generate_sample_inventory(paper_supplies, seed=seed)
+        inventory_df = generate_sample_inventory(paper_supplies, seed=seed, coverage=coverage)
 
         # Seed initial transactions
         initial_transactions = []
@@ -948,6 +949,7 @@ def quoting_check_bulk_discount(item_name: str, quantity: int) -> Dict:
             "reason": "item not found",
         }
 
+    calculation_explanation = f"Calculation: {quantity} units * ${pricing['unit_price']:.2f}/unit"
     discount_rate = 0.10 if quantity >= 100 else 0.0
     discount_amount = pricing["subtotal"] * discount_rate
     total_after_discount = pricing["subtotal"] - discount_amount
@@ -961,6 +963,7 @@ def quoting_check_bulk_discount(item_name: str, quantity: int) -> Dict:
         "discount_rate": discount_rate,
         "discount_amount": discount_amount,
         "total_after_discount": total_after_discount,
+        "calculation_explanation": calculation_explanation,
     }
 
 
@@ -993,7 +996,8 @@ def quoting_generate_quote(
             "item_name": item_name,
             "quantity": quantity,
             "quote_date": quote_date,
-            "reason": "item not found",
+            "reason_code": "ITEM_NOT_FOUND",
+            "reason": "The requested item could not be found in our inventory.",
         }
 
     return {
@@ -1008,6 +1012,7 @@ def quoting_generate_quote(
         "discount_amount": pricing["discount_amount"],
         "quoted_total": pricing["total_after_discount"],
         "available": availability["available"],
+        "calculation_explanation": pricing.get("calculation_explanation", "Standard pricing applied."),
         "current_stock": availability["current_stock"],
         "shortfall": availability["shortfall"],
     }
@@ -1073,7 +1078,8 @@ def ordering_create_order(
             "item_name": item_name,
             "quantity": quantity,
             "order_date": order_date,
-            "reason": "item not found",
+            "reason_code": "ITEM_NOT_FOUND",
+            "reason": "The requested item could not be found in our inventory.",
         }
 
     if not availability["available"]:
@@ -1084,7 +1090,8 @@ def ordering_create_order(
             "quantity": quantity,
             "order_date": order_date,
             "status": "rejected",
-            "reason": "insufficient stock",
+            "reason_code": "OUT_OF_STOCK",
+            "reason": f"Insufficient stock. Only {availability['current_stock']} units available.",
             "current_stock": availability["current_stock"],
             "shortfall": availability["shortfall"],
         }
@@ -1170,7 +1177,6 @@ def ordering_list_orders(item_name: Optional[str] = None) -> Dict:
         SELECT id, item_name, units, price, transaction_date
         FROM transactions
         WHERE transaction_type = 'sales' AND item_name IS NOT NULL
-        WHERE transaction_type = 'sales'
         ORDER BY transaction_date DESC
         """
         df = pd.read_sql(query, db_engine)
@@ -1606,20 +1612,32 @@ notification_agent = build_notification_agent()
 # ORCHESTRATOR ROUTING FUNCTION
 #################################################################################
 
-def customer_message(item_name: str, quantity: int, fulfilled: bool, total_price: float = None, reason: str = None, delivery_date: str = None) -> str:
+def customer_message(item_name: str, quantity: int, fulfilled: bool, total_price: float = None, reason: str = None, delivery_date: str = None, calculation_explanation: str = None) -> str:
     """Formats a consistent, customer-facing response for an order or quote request."""
     if fulfilled:
+        explanation_part = ""
+        if calculation_explanation:
+            explanation_part = f"\n  How we calculated this: {calculation_explanation}."
         return (
             f"Your order for {quantity} units of {item_name} is confirmed. "
             f"Total price: ${total_price:.2f}. "
-            f"Bulk discounts were applied where eligible. "
-            f"Expected delivery date: {delivery_date}."
+            f"Bulk discounts were applied where eligible. Expected delivery date: {delivery_date}."
+            f"{explanation_part}"
         )
     return (
         f"We cannot fulfill your request for {quantity} units of {item_name} right now. "
-        f"Reason: {reason}. Please contact sales for alternatives or a revised delivery date."
+        f"Reason: {reason}. Please try a smaller quantity or contact sales for alternatives."
     )
 
+
+def parse_request_items(request: str) -> List[str]:
+    """A simple parser to extract item and quantity lines from a request."""
+    lines = [line.strip() for line in request.split('\n') if '-' in line]
+    items = []
+    for line in lines:
+        # Remove the leading "- " and extract the core request
+        items.append(line.lstrip('- ').strip())
+    return items if items else [request] # Fallback to the whole request
 
 
 
@@ -1792,7 +1810,7 @@ def call_multi_agent_system(user_request: str) -> Dict:
 def run_test_scenarios():
     
     print("Initializing Database...")
-    init_database(db_engine)
+    init_database(db_engine, coverage=0.8)
     try:
         quote_requests_sample = pd.read_csv("quote_requests_sample.csv")
         quote_requests_sample["request_date"] = pd.to_datetime(
