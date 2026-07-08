@@ -670,6 +670,31 @@ model = OpenAIServerModel(
     api_key=openai_api_key,
 )
 
+ITEM_ALIASES = {
+    "a4 white printer paper": "A4 paper",
+    "a4 printing paper": "A4 paper",
+    "printer paper": "Standard copy paper",
+    "standard printing paper": "Standard copy paper",
+    "heavy cardstock": "Cardstock",
+    "colored cardstock": "Colored paper",
+    "poster board": "Poster paper",
+    "table napkins": "Paper napkins",
+    "biodegradable paper cups": "Paper cups",
+    "paper cups (biodegradable)": "Paper cups",
+    "biodegradable paper plates": "Paper plates",
+    "paper plates (biodegradable)": "Paper plates",
+    "colorful construction paper": "Construction paper",
+    "a4 size printer paper": "A4 paper",
+    "a4 white paper": "A4 paper",
+}
+
+def normalize_item_name(raw_name: str) -> str:
+    """Normalizes a raw item name to its canonical form using a dictionary of aliases."""
+    raw = raw_name.lower().strip()
+    for phrase, canonical in ITEM_ALIASES.items():
+        if phrase in raw:
+            return canonical
+    return raw_name
 #################################################################################
 # TOOL DEFINITIONS - Agent Tool Groups with Data Flow Annotations
 #################################################################################
@@ -718,6 +743,7 @@ def inventory_check_item(item_name: str, as_of_date: str) -> Dict:
     Returns:
         Dictionary with item_name, as_of_date, current_stock, and found status
     """
+    item_name = normalize_item_name(item_name)
     item_details = inventory_get_item_details(item_name)
 
     if not item_details["found"]:
@@ -751,6 +777,7 @@ def inventory_check_availability(item_name: str, quantity: int, as_of_date: str)
     Returns:
         Dictionary with availability status, current stock, and shortfall if any
     """
+    item_name = normalize_item_name(item_name)
     stock_info = inventory_check_item(item_name, as_of_date)
     current_stock = stock_info["current_stock"]
 
@@ -774,6 +801,7 @@ def inventory_get_item_details(item_name: str) -> Dict:
     Returns:
         Dictionary with item details including category, unit_price, and min_stock_level
     """
+    item_name = normalize_item_name(item_name)
     query = "SELECT * FROM inventory WHERE item_name = :item_name"
     item_df = pd.read_sql(query, db_engine, params={"item_name": item_name})
 
@@ -804,6 +832,7 @@ def inventory_check_restock_need(item_name: str, as_of_date: str) -> Dict:
     Returns:
         Dictionary with needs_restock status and restock_amount if needed
     """
+    item_name = normalize_item_name(item_name)
     item_details = inventory_get_item_details(item_name)
 
     if not item_details["found"]:
@@ -846,6 +875,7 @@ def quoting_check_price(item_name: str) -> Dict:
     Returns:
         Dictionary with found status and unit_price if available
     """
+    item_name = normalize_item_name(item_name)
     details = inventory_get_item_details(item_name)
 
     if not details["found"]:
@@ -873,6 +903,7 @@ def quoting_calculate_total(item_name: str, quantity: int) -> Dict:
     Returns:
         Dictionary with success status, unit_price, and subtotal
     """
+    item_name = normalize_item_name(item_name)
     price_info = quoting_check_price(item_name)
 
     if not price_info["found"]:
@@ -906,6 +937,7 @@ def quoting_check_bulk_discount(item_name: str, quantity: int) -> Dict:
     Returns:
         Dictionary with discount_rate, discount_amount, and total_after_discount
     """
+    item_name = normalize_item_name(item_name)
     pricing = quoting_calculate_total(item_name, quantity)
 
     if not pricing["success"]:
@@ -950,6 +982,7 @@ def quoting_generate_quote(
     Returns:
         Dictionary with quoted_total, availability status, and pricing details
     """
+    item_name = normalize_item_name(item_name)
     availability = inventory_check_availability(item_name, quantity, quote_date)
     pricing = quoting_check_bulk_discount(item_name, quantity)
 
@@ -998,6 +1031,7 @@ def quoting_quote_summary(
     Returns:
         Dictionary with complete quote summary including all pricing details
     """
+    item_name = normalize_item_name(item_name)
     return quoting_generate_quote(customer_name, item_name, quantity, quote_date)
 
 
@@ -1028,6 +1062,7 @@ def ordering_create_order(
     Returns:
         Dictionary with success status, transaction_id, and order details
     """
+    item_name = normalize_item_name(item_name)
     availability = inventory_check_availability(item_name, quantity, order_date)
     price_info = quoting_check_price(item_name)
 
@@ -1134,6 +1169,7 @@ def ordering_list_orders(item_name: Optional[str] = None) -> Dict:
         query = """
         SELECT id, item_name, units, price, transaction_date
         FROM transactions
+        WHERE transaction_type = 'sales' AND item_name IS NOT NULL
         WHERE transaction_type = 'sales'
         ORDER BY transaction_date DESC
         """
@@ -1475,6 +1511,7 @@ def build_inventory_agent():
             description="Handles inventory lookups, stock checks, item details, availability, and restock needs."
         )
     except TypeError:
+        # Fallback for older smolagents versions that don't accept name/description
         return ToolCallingAgent(
             tools=[
                 inventory_check_all,
@@ -1569,7 +1606,7 @@ notification_agent = build_notification_agent()
 # ORCHESTRATOR ROUTING FUNCTION
 #################################################################################
 
-def customer_message(item_name, quantity, fulfilled, total_price=None, reason=None, delivery_date=None):
+def customer_message(item_name: str, quantity: int, fulfilled: bool, total_price: float = None, reason: str = None, delivery_date: str = None) -> str:
     """Formats a consistent, customer-facing response for an order or quote request."""
     if fulfilled:
         return (
@@ -1582,6 +1619,7 @@ def customer_message(item_name, quantity, fulfilled, total_price=None, reason=No
         f"We cannot fulfill your request for {quantity} units of {item_name} right now. "
         f"Reason: {reason}. Please contact sales for alternatives or a revised delivery date."
     )
+
 
 
 
@@ -1693,7 +1731,6 @@ def call_multi_agent_system(user_request: str) -> Dict:
     
     try:
         # Execute selected agent with capped reasoning steps
-        # max_steps=50 prevents agents from running indefinitely
         raw_response = str(agent.run(prompt, max_steps=50))
 
         # Default response structure
@@ -1705,6 +1742,7 @@ def call_multi_agent_system(user_request: str) -> Dict:
             "order_details": {}
         }
 
+        # Attempt to parse the agent's string response into a dictionary
         try:
             # Find the last dictionary in the agent's output string
             last_dict_str = "{" + raw_response.rsplit("{", 1)[-1]
@@ -1826,15 +1864,22 @@ def run_test_scenarios():
 
     # Save results
     pd.DataFrame(results).to_csv("test_results.csv", index=False)
+
+    # Reread results and run final checks before submission
+    results_df = pd.read_csv("test_results.csv")
+    print("\n--- Final Evaluation Checks ---")
+    print(f"Total cash changes: {results_df['cash_changed'].sum()}")
+    print(f"Total fulfilled requests: {results_df['fulfilled'].sum()}")
     
-    # Add assertions for rigor
-    results_df = pd.DataFrame(results)
-    assert results_df["cash_changed"].sum() >= 3, "Assertion failed: Cash balance did not change for at least three requests."
-    assert not results_df["fulfilled"].all(), "Assertion failed: At least one request should have been unfulfilled."
-    print("\nAssertions passed: System fulfilled at least three requests and correctly rejected at least one.")
-    
+    assert results_df["cash_changed"].sum() >= 3
+    assert results_df["fulfilled"].sum() >= 3
+    assert not results_df["fulfilled"].all(), "Assertion Failed: Expected at least one request to be unfulfilled, but all were fulfilled."
+
+    print("\n✅ Assertions Passed: System successfully changed the cash balance and fulfilled at least 3 requests, while also correctly rejecting at least one.")
+
     return results
 
 
 if __name__ == "__main__":
     results = run_test_scenarios()
+    print("\n--- Final Returned Results Object ---", results, sep="\n")
